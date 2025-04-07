@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time ECG Monitor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 20px;
+            gap: 10px;
+        }
+        .stat-box {
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            flex: 1;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #d9534f;
+            margin: 10px 0;
+        }
+        .controls {
+            margin: 20px 0;
+            text-align: center;
+        }
+        button {
+            background-color: #5cb85c;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 0 5px;
+        }
+        button:hover {
+            background-color: #4cae4c;
+        }
+        .status {
+            text-align: center;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+        .connected {
+            color: #5cb85c;
+        }
+        .disconnected {
+            color: #d9534f;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Real-time ECG Monitor</h1>
+        
+        <div class="status">
+            <span id="connection-status" class="disconnected">Disconnected</span>
+        </div>
+        
+        <div class="controls">
+            <button id="connect-btn">Connect</button>
+            <button id="disconnect-btn" disabled>Disconnect</button>
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="ecgChart"></canvas>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-box">
+                <div>Heart Rate</div>
+                <div id="heart-rate" class="stat-value">--</div>
+                <div>BPM</div>
+            </div>
+            <div class="stat-box">
+                <div>PR Interval</div>
+                <div id="pr-interval" class="stat-value">--</div>
+                <div>ms</div>
+            </div>
+            <div class="stat-box">
+                <div>QRS Duration</div>
+                <div id="qrs-duration" class="stat-value">--</div>
+                <div>ms</div>
+            </div>
+            <div class="stat-box">
+                <div>QT Interval</div>
+                <div id="qt-interval" class="stat-value">--</div>
+                <div>ms</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const MAX_DATA_POINTS = 500;  // Maximum number of data points to display
+        const SAMPLE_RATE = 250;      // Assumed sample rate in Hz
+        
+        // Initialize variables
+        let ecgData = Array(MAX_DATA_POINTS).fill(0);
+        let websocket = null;
+        
+        // DOM elements
+        const connectBtn = document.getElementById('connect-btn');
+        const disconnectBtn = document.getElementById('disconnect-btn');
+        const connectionStatus = document.getElementById('connection-status');
+        const heartRateDisplay = document.getElementById('heart-rate');
+        const prIntervalDisplay = document.getElementById('pr-interval');
+        const qrsDurationDisplay = document.getElementById('qrs-duration');
+        const qtIntervalDisplay = document.getElementById('qt-interval');
+        
+        // Initialize Chart.js
+        const ctx = document.getElementById('ecgChart').getContext('2d');
+        const ecgChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(MAX_DATA_POINTS).fill(''),
+                datasets: [{
+                    label: 'ECG Signal',
+                    data: ecgData,
+                    borderColor: 'rgb(75, 192, 192)',
+                    borderWidth: 1.5,
+                    fill: false,
+                    tension: 0.1,
+                    pointRadius: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: {
+                    duration: 0  // Disable animation for better performance
+                },
+                scales: {
+                    x: {
+                        display: true,
+                        grid: {
+                            display: false
+                        },
+                        ticks: {
+                            display: false
+                        }
+                    },
+                    y: {
+                        display: true,
+                        min: -0.2,   // Set min value based on your ECG range
+                        max: 1.2,    // Set max value based on your ECG range
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.1)'
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+        
+        // Connect to WebSocket
+        function connectWebSocket() {
+            websocket = new WebSocket('ws://192.168.0.113:81');
+            
+            websocket.onopen = function(event) {
+                connectionStatus.textContent = 'Connected';
+                connectionStatus.className = 'connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                console.log('Connected to WebSocket server');
+            };
+            
+            websocket.onclose = function(event) {
+                connectionStatus.textContent = 'Disconnected';
+                connectionStatus.className = 'disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                console.log('Disconnected from WebSocket server');
+            };
+            
+            websocket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                connectionStatus.textContent = 'Error connecting';
+                connectionStatus.className = 'disconnected';
+            };
+            
+            websocket.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                
+                // Add new data point and remove oldest one
+                ecgData.push(data.value);
+                ecgData.shift();
+                
+                // Update chart
+                ecgChart.data.datasets[0].data = ecgData;
+                ecgChart.update();
+                
+                // Calculate ECG metrics (simulated values)
+                calculateEcgMetrics();
+            };
+        }
+        
+        // Disconnect from WebSocket
+        function disconnectWebSocket() {
+            if (websocket) {
+                websocket.close();
+                websocket = null;
+            }
+        }
+        
+        // Calculate ECG metrics (simplified)
+        let beatCount = 0;
+        let lastBeatTime = 0;
+        let heartRates = [];
+        
+        function calculateEcgMetrics() {
+            // Detect R-peaks (simplified)
+            const threshold = 0.5;  // Threshold for R-peak detection
+            const lastIndex = ecgData.length - 1;
+            
+            if (ecgData[lastIndex] > threshold && ecgData[lastIndex-1] < threshold) {
+                const currentTime = Date.now();
+                
+                if (lastBeatTime > 0) {
+                    const interval = currentTime - lastBeatTime;
+                    const heartRate = Math.round(60000 / interval);
+                    
+                    // Store heart rates for averaging
+                    heartRates.push(heartRate);
+                    if (heartRates.length > 5) {
+                        heartRates.shift();
+                    }
+                    
+                    // Calculate average heart rate
+                    const avgHeartRate = Math.round(heartRates.reduce((a, b) => a + b, 0) / heartRates.length);
+                    
+                    // Update displays
+                    heartRateDisplay.textContent = avgHeartRate;
+                    
+                    // Simulated ECG intervals (these would normally be calculated from the signal)
+                    prIntervalDisplay.textContent = Math.round(140 + Math.random() * 20);
+                    qrsDurationDisplay.textContent = Math.round(80 + Math.random() * 20);
+                    qtIntervalDisplay.textContent = Math.round(380 + Math.random() * 40);
+                }
+                
+                lastBeatTime = currentTime;
+                beatCount++;
+            }
+        }
+        
+        // Event listeners
+        connectBtn.addEventListener('click', connectWebSocket);
+        disconnectBtn.addEventListener('click', disconnectWebSocket);
+        
+        // Initialize UI
+        connectionStatus.textContent = 'Disconnected';
+        connectionStatus.className = 'disconnected';
+    </script>
+</body>
+</html>
